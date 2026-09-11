@@ -144,9 +144,11 @@ function loadSavedSettings() {
   if (s.repo)  document.getElementById('ghRepo').value  = s.repo;
 }
 function saveSettings() {
+  const cleanRepo = sanitizeRepo(document.getElementById('ghRepo').value);
+  document.getElementById('ghRepo').value = cleanRepo; // reflect the cleaned-up value back in the field
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     token: document.getElementById('ghToken').value.trim(),
-    repo:  document.getElementById('ghRepo').value.trim(),
+    repo:  cleanRepo,
   }));
 }
 
@@ -179,18 +181,68 @@ dropZone.addEventListener('drop', e => {
 // ═══════════════════════════════════════════
 // GITHUB UPLOAD
 // ═══════════════════════════════════════════
+// Cleans up common ways people paste the repo field wrong:
+// "https://github.com/user/repo", "github.com/user/repo/", "user/repo.git", etc.
+function sanitizeRepo(raw) {
+  let r = raw.trim();
+  r = r.replace(/^https?:\/\/(www\.)?github\.com\//i, '');
+  r = r.replace(/\.git$/i, '');
+  r = r.replace(/^\/+|\/+$/g, '');
+  return r;
+}
+
+// Pre-flight check so we can tell the user EXACTLY what's wrong
+// instead of a generic "Not Found".
+async function verifyRepoAccess(repo, token) {
+  const res = await fetch(`https://api.github.com/repos/${repo}`, {
+    headers: { Authorization: `token ${token}` },
+  });
+  if (res.status === 404) {
+    throw new Error(
+      `Repository "${repo}" not found with this token. This almost always means either: ` +
+      `(1) the repo name is misspelled/wrong case, or ` +
+      `(2) you're using a "Fine-grained" GitHub token that hasn't been given access to this repo ` +
+      `(fine-grained tokens return 404 instead of 403 when access is missing — check ` +
+      `Settings → Developer settings → Fine-grained tokens → your token → Repository access). ` +
+      `Easiest fix: create a CLASSIC token instead at github.com/settings/tokens/new with the "repo" scope checked.`
+    );
+  }
+  if (res.status === 401) {
+    throw new Error('GitHub rejected the token itself (401 Unauthorized). Double-check you copied the whole token, and that it hasn\'t expired or been revoked.');
+  }
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(`GitHub error ${res.status}: ${e.message || 'could not access repository'}`);
+  }
+  const info = await res.json();
+  if (info.permissions && info.permissions.push === false) {
+    throw new Error(`Your token can read "${repo}" but doesn't have write/push access, so uploads will fail. Make sure the token has the "repo" scope (classic) or "Contents: Read and write" (fine-grained).`);
+  }
+}
+
 async function uploadToGitHub() {
   const token   = document.getElementById('ghToken').value.trim();
-  const repo    = document.getElementById('ghRepo').value.trim();
+  const repo    = sanitizeRepo(document.getElementById('ghRepo').value);
   const caption = document.getElementById('memCaption').value.trim();
   const date    = document.getElementById('memDate').value;
 
   if (!token || !repo) { setStatus('Please enter your GitHub token and repository.', 'error'); return; }
+  if (!repo.includes('/')) { setStatus('Repository should look like "username/repo-name".', 'error'); return; }
   if (!pendingFiles.length) { setStatus('Please select at least one photo.', 'error'); return; }
 
   saveSettings();
-  setStatus('Uploading... please wait ♡', 'loading');
+  setStatus('Checking repo access... ♡', 'loading');
   document.getElementById('uploadBtn').disabled = true;
+
+  try {
+    await verifyRepoAccess(repo, token);
+  } catch (err) {
+    setStatus(`❌ ${err.message}`, 'error');
+    document.getElementById('uploadBtn').disabled = false;
+    return;
+  }
+
+  setStatus('Uploading... please wait ♡', 'loading');
 
   const uploaded = [];
   for (const file of pendingFiles) {
@@ -204,7 +256,10 @@ async function uploadToGitHub() {
         headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
         body:    JSON.stringify({ message: `Add memory: ${caption || safe} ♡`, content: base64 }),
       });
-      if (!res.ok) { const e = await res.json(); throw new Error(e.message || 'Upload failed'); }
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(`(${res.status}) ${e.message || 'Upload failed'}`);
+      }
       const data = await res.json();
       uploaded.push({
         id:        ts + '_' + Math.random().toString(36).slice(2),
@@ -259,7 +314,7 @@ async function loadMemories() {
   empty.classList.add('hidden');
 
   const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-  const repo  = saved.repo  || '';
+  const repo  = saved.repo ? sanitizeRepo(saved.repo) : '';
   const token = saved.token || '';
 
   if (!repo) {
