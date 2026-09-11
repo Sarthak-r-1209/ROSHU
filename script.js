@@ -6,6 +6,10 @@ const SETTINGS_KEY  = 'roshni_memories_settings';
 const GALLERY_AUTH  = 'roshni_gallery_unlocked';
 const PASSWORD      = 'roshnisarthakforever'; // change this to whatever secret word you like
 
+// The repo everyone's gallery reads from, regardless of device/browser.
+// ⚠️ Set this to your real repo, exactly as it appears on GitHub.
+const REPO = 'Sarthak-r-1209/ROSHU';
+
 // ═══════════════════════════════════════════
 // CANVAS — floating hearts, stars, flowers
 // ═══════════════════════════════════════════
@@ -141,14 +145,13 @@ function revealGallery() {
 function loadSavedSettings() {
   const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
   if (s.token) document.getElementById('ghToken').value = s.token;
-  if (s.repo)  document.getElementById('ghRepo').value  = s.repo;
+  // Repo is fixed for everyone — always show it, ignore whatever was saved before.
+  document.getElementById('ghRepo').value = REPO;
 }
 function saveSettings() {
-  const cleanRepo = sanitizeRepo(document.getElementById('ghRepo').value);
-  document.getElementById('ghRepo').value = cleanRepo; // reflect the cleaned-up value back in the field
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({
     token: document.getElementById('ghToken').value.trim(),
-    repo:  cleanRepo,
+    repo:  REPO,
   }));
 }
 
@@ -222,12 +225,11 @@ async function verifyRepoAccess(repo, token) {
 
 async function uploadToGitHub() {
   const token   = document.getElementById('ghToken').value.trim();
-  const repo    = sanitizeRepo(document.getElementById('ghRepo').value);
+  const repo    = REPO; // fixed — everyone uploads to the same place
   const caption = document.getElementById('memCaption').value.trim();
   const date    = document.getElementById('memDate').value;
 
-  if (!token || !repo) { setStatus('Please enter your GitHub token and repository.', 'error'); return; }
-  if (!repo.includes('/')) { setStatus('Repository should look like "username/repo-name".', 'error'); return; }
+  if (!token) { setStatus('Please enter your GitHub token.', 'error'); return; }
   if (!pendingFiles.length) { setStatus('Please select at least one photo.', 'error'); return; }
 
   saveSettings();
@@ -314,13 +316,8 @@ async function loadMemories() {
   empty.classList.add('hidden');
 
   const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-  const repo  = saved.repo ? sanitizeRepo(saved.repo) : '';
-  const token = saved.token || '';
-
-  if (!repo) {
-    renderGallery([]);
-    return;
-  }
+  const repo  = REPO; // fixed — same repo for every visitor, on any device
+  const token = saved.token || ''; // optional: only helps with GitHub's rate limit, viewing works without it
 
   try {
     const headers = token ? { Authorization: `token ${token}` } : {};
