@@ -234,7 +234,7 @@ body {
   color: var(--pink-dark);
   font-weight: 700;
 }
-.header-nav { display: flex; gap: 0.4rem; }
+.header-nav { display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: flex-end; }
 .nav-btn {
   font-family: var(--pixel);
   font-size: clamp(0.68rem, 2.5vw, 0.8rem);
@@ -786,4 +786,6 @@ body {
   .lock-card { padding: 1.6rem 1.1rem 1.4rem; }
   .gallery-grid { grid-template-columns: repeat(2, 1fr); gap: 0.7rem; }
   .mini-player { max-width: 100%; }
+  .nav-btn { padding: 0.35rem 0.65rem; font-size: 0.64rem; }
+  .header-title { display: none; }
 }

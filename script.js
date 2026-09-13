@@ -9,8 +9,19 @@ const PASSWORD      = 'roshanisarthakforever'; // change this to whatever secret
 // The repo everyone's gallery reads from, regardless of device/browser.
 // ⚠️ Set this to your real repo, exactly as it appears on GitHub.
 const REPO = 'Sarthak-r-1209/ROSHU';
-const MEDIA_FOLDER = 'memories';
-const MANIFEST_PATH = 'memories/manifest.json';
+
+// Photos and videos now live in their own folders/manifests so they can
+// have separate galleries.
+const PHOTO_FOLDER         = 'photo-memories';
+const PHOTO_MANIFEST_PATH  = 'photo-memories/manifest.json';
+const VIDEO_FOLDER         = 'video-memories';
+const VIDEO_MANIFEST_PATH  = 'video-memories/manifest.json';
+
+// Old, pre-split location — kept only so the one-time migration button
+// can find memories that were uploaded before Photos/Videos were separated.
+const OLD_MEDIA_FOLDER   = 'memories';
+const OLD_MANIFEST_PATH  = 'memories/manifest.json';
+
 const MUSIC_FOLDER = 'music';
 const MUSIC_MANIFEST_PATH = 'music/manifest.json';
 const MAX_FILE_SIZE_MB = 45; // GitHub's Contents API + browser memory get unreliable past this
@@ -114,11 +125,13 @@ function showView(view) {
   document.getElementById(view + 'View').classList.remove('hidden');
   document.getElementById(view + 'View').classList.add('active');
   document.getElementById('nav' + view.charAt(0).toUpperCase() + view.slice(1)).classList.add('active');
-  if (view === 'music') initMusicView();
+  if (view === 'videos') initVideosView();
+  if (view === 'music')  initMusicView();
 }
 
 // ═══════════════════════════════════════════
-// GALLERY PASSWORD
+// GALLERY PASSWORD (unlocks Photos, and — since it's the same session —
+// the Videos and Music tabs too)
 // ═══════════════════════════════════════════
 function unlockGallery() {
   const input = document.getElementById('galleryPwInput').value.trim().toLowerCase();
@@ -131,7 +144,7 @@ function unlockGallery() {
     lockEl.style.transform  = 'scale(0.95)';
     setTimeout(() => {
       lockEl.style.display = 'none';
-      revealGallery();
+      revealPhotos();
     }, 400);
   } else {
     const inp = document.getElementById('galleryPwInput');
@@ -143,8 +156,8 @@ function unlockGallery() {
   }
 }
 
-function revealGallery() {
-  const content = document.getElementById('galleryContent');
+function revealPhotos() {
+  const content = document.getElementById('photoContent');
   content.classList.remove('hidden');
   content.style.opacity   = '0';
   content.style.transform = 'translateY(12px)';
@@ -153,7 +166,7 @@ function revealGallery() {
     content.style.opacity   = '1';
     content.style.transform = 'translateY(0)';
   });
-  loadMemories();
+  loadPhotos();
 }
 
 // ═══════════════════════════════════════════
@@ -241,6 +254,15 @@ async function verifyRepoAccess(repo, token) {
   if (info.permissions && info.permissions.push === false) {
     throw new Error(`Your token can read "${repo}" but doesn't have write/push access, so uploads will fail. Make sure the token has the "repo" scope (classic) or "Contents: Read and write" (fine-grained).`);
   }
+  // Photos load without a token for everyone else, so the repo itself must be
+  // public — otherwise nothing will show up on any device but this one.
+  if (info.private) {
+    throw new Error(
+      `This repo is PRIVATE. That's almost certainly why photos/videos aren't loading on other devices — ` +
+      `viewing the gallery doesn't use a token, so it only works if the repo is public. ` +
+      `Go to the repo on GitHub → Settings → scroll to "Danger Zone" → Change visibility → Make public.`
+    );
+  }
 }
 
 async function uploadToGitHub() {
@@ -250,7 +272,7 @@ async function uploadToGitHub() {
   const date    = document.getElementById('memDate').value;
 
   if (!token) { setStatus('Please enter your GitHub token.', 'error'); return; }
-  if (!pendingFiles.length) { setStatus('Please select at least one photo.', 'error'); return; }
+  if (!pendingFiles.length) { setStatus('Please select at least one photo or video.', 'error'); return; }
 
   saveSettings();
   setStatus('Checking repo access... ♡', 'loading');
@@ -272,10 +294,12 @@ async function uploadToGitHub() {
       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)}MB — please keep files under ${MAX_FILE_SIZE_MB}MB (try compressing the video first).`);
       }
+      const isVideo = file.type.startsWith('video/');
+      const folder  = isVideo ? VIDEO_FOLDER : PHOTO_FOLDER;
       const base64  = await toBase64(file);
       const ts      = Date.now();
       const safe    = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path    = `${MEDIA_FOLDER}/${ts}_${safe}`;
+      const path    = `${folder}/${ts}_${safe}`;
       const res     = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
         method:  'PUT',
         headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
@@ -288,7 +312,7 @@ async function uploadToGitHub() {
       const data = await res.json();
       uploaded.push({
         id:        ts + '_' + Math.random().toString(36).slice(2),
-        type:      file.type.startsWith('video/') ? 'video' : 'photo',
+        type:      isVideo ? 'video' : 'photo',
         caption:   caption || safe,
         date:      date || new Date().toISOString().split('T')[0],
         url:       data.content.download_url,
@@ -301,9 +325,13 @@ async function uploadToGitHub() {
     }
   }
 
-  setStatus(`✓ ${uploaded.length} item${uploaded.length > 1 ? 's' : ''} saved! Updating gallery list... ♡`, 'loading');
+  const uploadedPhotos = uploaded.filter(u => u.type !== 'video');
+  const uploadedVideos = uploaded.filter(u => u.type === 'video');
+
+  setStatus(`✓ ${uploaded.length} item${uploaded.length > 1 ? 's' : ''} saved! Updating gallery... ♡`, 'loading');
   try {
-    await appendManyToManifest(MANIFEST_PATH, uploaded, token);
+    if (uploadedPhotos.length) await appendManyToManifest(PHOTO_MANIFEST_PATH, uploadedPhotos, token);
+    if (uploadedVideos.length) await appendManyToManifest(VIDEO_MANIFEST_PATH, uploadedVideos, token);
   } catch (err) {
     console.error('Manifest update failed:', err);
     // Photos/videos are already safely uploaded even if this step fails — not fatal.
@@ -315,12 +343,19 @@ async function uploadToGitHub() {
   document.getElementById('previewStrip').innerHTML = '';
   document.getElementById('memCaption').value = '';
   document.getElementById('memDate').value    = '';
-  setTimeout(() => { loadMemories(); showView('gallery'); setStatus(''); }, 2000);
+
+  const nextView = (uploadedVideos.length && !uploadedPhotos.length) ? 'videos' : 'photos';
+  setTimeout(() => {
+    if (uploadedPhotos.length) loadPhotos();
+    if (uploadedVideos.length) loadVideos();
+    showView(nextView);
+    setStatus('');
+  }, 2000);
 }
 
 // Fetches a manifest.json via GitHub's raw CDN, which is NOT subject to the
 // tight 60-requests/hour limit the api.github.com listing endpoint has — this
-// is what makes the gallery/playlist load fast and reliably on any device.
+// is what makes the galleries/playlist load fast and reliably on any device.
 async function fetchManifest(path) {
   for (const branch of ['main', 'master']) {
     try {
@@ -377,52 +412,48 @@ async function appendManyToManifest(path, newEntries, token) {
   }
 }
 
-// One-time helper: builds manifest.json from whatever's already in memories/,
-// for photos uploaded before this manifest system existed. Run once from a
-// device that has a token saved, then every device is fixed going forward.
-async function syncManifestFromGitHub() {
+// One-time helper: moves anything still sitting in the old combined memories/
+// folder (from before Photos and Videos were split) into the two new
+// manifests. Safe to leave the original files where they are — only the
+// manifest entries (which just point at each file's URL) need to move.
+// Run once from a device that has a token saved, then every device is fixed
+// going forward.
+async function migrateOldMemories() {
   const token = document.getElementById('ghToken').value.trim();
   if (!token) { setStatus('Enter your GitHub token first to sync.', 'error'); return; }
 
-  setStatus('Syncing existing photos into the manifest... ♡', 'loading');
+  setStatus('Migrating old memories into Photos/Videos... ♡', 'loading');
   try {
     const headers = { Authorization: `token ${token}` };
-    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/memories`, { headers });
-    if (!res.ok) throw new Error(`(${res.status}) Couldn't list existing photos`);
-    const files = await res.json();
 
-    const manifest = files
-      .filter(f => /\.(jpe?g|png|gif|webp|mp4|webm|mov|m4v)$/i.test(f.name))
-      .map(f => {
-        const nameNoExt = f.name.replace(/\.[^.]+$/, '');
-        const parts     = nameNoExt.split('_');
-        const rawName   = parts.slice(1).join(' ').replace(/_/g, ' ') || 'A sweet memory';
-        const isVideo   = /\.(mp4|webm|mov|m4v)$/i.test(f.name);
-        return { id: f.sha, type: isVideo ? 'video' : 'photo', caption: rawName, date: '', url: f.download_url };
-      });
+    // Prefer the old combined manifest if it exists — it already has types.
+    let combined = await fetchManifest(OLD_MANIFEST_PATH);
 
-    let sha = null;
-    const getRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${MANIFEST_PATH}`, { headers });
-    if (getRes.ok) { const d = await getRes.json(); sha = d.sha; }
-
-    const body = {
-      message: 'Sync memories manifest ♡',
-      content: utf8ToBase64(JSON.stringify(manifest, null, 2)),
-    };
-    if (sha) body.sha = sha;
-
-    const putRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${MANIFEST_PATH}`, {
-      method:  'PUT',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body:    JSON.stringify(body),
-    });
-    if (!putRes.ok) {
-      const e = await putRes.json().catch(() => ({}));
-      throw new Error(e.message || 'Failed to save manifest');
+    if (!combined) {
+      // Fall back to listing the old folder directly (pre-manifest uploads).
+      const res = await fetch(`https://api.github.com/repos/${REPO}/contents/${OLD_MEDIA_FOLDER}`, { headers });
+      if (res.status === 404) { setStatus('No old memories folder found — nothing to migrate.', 'error'); return; }
+      if (!res.ok) throw new Error(`(${res.status}) Couldn't list old memories`);
+      const files = await res.json();
+      combined = files
+        .filter(f => /\.(jpe?g|png|gif|webp|mp4|webm|mov|m4v)$/i.test(f.name))
+        .map(f => {
+          const nameNoExt = f.name.replace(/\.[^.]+$/, '');
+          const parts     = nameNoExt.split('_');
+          const rawName   = parts.slice(1).join(' ').replace(/_/g, ' ') || 'A sweet memory';
+          const isVideo   = /\.(mp4|webm|mov|m4v)$/i.test(f.name);
+          return { id: f.sha, type: isVideo ? 'video' : 'photo', caption: rawName, date: '', url: f.download_url };
+        });
     }
 
-    setStatus(`✓ Synced ${manifest.length} photo(s) — gallery will now load fast everywhere ♡`, 'success');
-    setTimeout(() => { loadMemories(); setStatus(''); }, 2000);
+    const photos = combined.filter(m => m.type !== 'video');
+    const videos = combined.filter(m => m.type === 'video');
+
+    if (photos.length) await appendManyToManifest(PHOTO_MANIFEST_PATH, photos, token);
+    if (videos.length) await appendManyToManifest(VIDEO_MANIFEST_PATH, videos, token);
+
+    setStatus(`✓ Migrated ${photos.length} photo(s) and ${videos.length} video(s) — gallery will now load fast everywhere ♡`, 'success');
+    setTimeout(() => { loadPhotos(); loadVideos(); setStatus(''); }, 2000);
   } catch (err) {
     setStatus(`❌ ${err.message}`, 'error');
   }
@@ -443,85 +474,81 @@ function setStatus(msg, type = '') {
 }
 
 // ═══════════════════════════════════════════
-// GALLERY — loads from GitHub (synced for both)
+// PHOTOS
 // ═══════════════════════════════════════════
-let allMemories = [];
+let allPhotos = [];
 
-async function loadMemories() {
-  const grid  = document.getElementById('galleryGrid');
-  const empty = document.getElementById('emptyState');
+async function loadPhotos() {
+  const grid  = document.getElementById('photoGrid');
+  const empty = document.getElementById('photoEmptyState');
   grid.innerHTML = `
     <div class="loading-state">
       <img src="cat_wave.gif" alt="" style="width:75px;mix-blend-mode:multiply;" />
-      <p style="font-family:'Pixelify Sans',monospace;color:#9c4473;margin-top:0.5rem;font-size:0.88rem;">loading memories... ♡</p>
+      <p style="font-family:'Pixelify Sans',monospace;color:#9c4473;margin-top:0.5rem;font-size:0.88rem;">loading photos... ♡</p>
     </div>`;
   empty.classList.add('hidden');
 
   // FAST PATH: read manifest.json via GitHub's raw CDN (works reliably on any device).
-  const manifest = await fetchManifest(MANIFEST_PATH);
+  const manifest = await fetchManifest(PHOTO_MANIFEST_PATH);
   if (manifest) {
-    allMemories = manifest.slice().reverse();
-    renderGallery(allMemories);
+    allPhotos = manifest.slice().reverse();
+    renderPhotoGallery(allPhotos);
     return;
   }
 
-  // FALLBACK: list the memories/ folder directly via the GitHub API. Used only
-  // if manifest.json doesn't exist yet (e.g. before the first sync/upload).
+  // FALLBACK: list the photo-memories/ folder directly via the GitHub API.
+  // Used only if manifest.json doesn't exist yet (e.g. before the first sync/upload).
   const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
   const token = saved.token || '';
 
   try {
     const headers = token ? { Authorization: `token ${token}` } : {};
-    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/memories`, { headers });
+    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/${PHOTO_FOLDER}`, { headers });
 
-    if (res.status === 404) { renderGallery([]); return; }
+    if (res.status === 404) { renderPhotoGallery([]); return; }
     if (res.status === 403) {
-      renderGallery([]);
-      const sub = document.querySelector('#emptyState .empty-sub');
+      renderPhotoGallery([]);
+      const sub = document.querySelector('#photoEmptyState .empty-sub');
       if (sub) sub.textContent = "GitHub rate limit reached — try again shortly, or upload once to auto-fix this.";
       return;
     }
     if (!res.ok) throw new Error('GitHub fetch failed');
 
     const files = await res.json();
-    allMemories = files
-      .filter(f => /\.(jpe?g|png|gif|webp|mp4|webm|mov|m4v)$/i.test(f.name))
+    allPhotos = files
+      .filter(f => /\.(jpe?g|png|gif|webp)$/i.test(f.name))
       .map(f => {
         const nameNoExt = f.name.replace(/\.[^.]+$/, '');
         const parts     = nameNoExt.split('_');
         const rawName   = parts.slice(1).join(' ').replace(/_/g, ' ') || 'A sweet memory';
-        const isVideo   = /\.(mp4|webm|mov|m4v)$/i.test(f.name);
-        return { id: f.sha, type: isVideo ? 'video' : 'photo', caption: rawName, date: '', url: f.download_url };
+        return { id: f.sha, type: 'photo', caption: rawName, date: '', url: f.download_url };
       })
       .reverse();
 
-    renderGallery(allMemories);
+    renderPhotoGallery(allPhotos);
   } catch (err) {
     console.error(err);
-    renderGallery([]);
+    renderPhotoGallery([]);
   }
 }
 
-function renderGallery(memories) {
-  const grid  = document.getElementById('galleryGrid');
-  const empty = document.getElementById('emptyState');
+function renderPhotoGallery(photos) {
+  const grid  = document.getElementById('photoGrid');
+  const empty = document.getElementById('photoEmptyState');
   grid.innerHTML = '';
 
-  if (!memories.length) {
+  if (!photos.length) {
     empty.classList.remove('hidden');
     return;
   }
   empty.classList.add('hidden');
 
-  memories.forEach((mem, i) => {
+  photos.forEach((mem, i) => {
     const card = document.createElement('div');
-    card.className = 'memory-card' + (mem.type === 'video' ? ' is-video' : '');
+    card.className = 'memory-card';
     card.style.animationDelay = (i * 0.055) + 's';
-    const mediaHtml = mem.type === 'video'
-      ? `<video src="${mem.url}" class="card-photo" muted preload="metadata"></video>`
-      : `<img src="${mem.url}" alt="${mem.caption}" class="card-photo" loading="lazy" />`;
     card.innerHTML = `
-      ${mediaHtml}
+      <img src="${mem.url}" alt="${mem.caption}" class="card-photo" loading="lazy" />
       <div class="memory-card-body">
         <p class="memory-card-caption">${mem.caption}</p>
         ${mem.date ? `<p class="memory-card-date">${formatDate(mem.date)}</p>` : ''}
@@ -531,9 +558,103 @@ function renderGallery(memories) {
   });
 }
 
-function filterMemories() {
-  const q = document.getElementById('searchBox').value.toLowerCase();
-  renderGallery(allMemories.filter(m => m.caption.toLowerCase().includes(q)));
+function filterPhotos() {
+  const q = document.getElementById('photoSearchBox').value.toLowerCase();
+  renderPhotoGallery(allPhotos.filter(m => m.caption.toLowerCase().includes(q)));
+}
+
+// ═══════════════════════════════════════════
+// VIDEOS
+// ═══════════════════════════════════════════
+let allVideos = [];
+
+function initVideosView() {
+  const unlocked = sessionStorage.getItem(GALLERY_AUTH) === 'true';
+  document.getElementById('videoLockedMsg').classList.toggle('hidden', unlocked);
+  document.getElementById('videoContent').classList.toggle('hidden', !unlocked);
+  if (unlocked) loadVideos();
+}
+
+async function loadVideos() {
+  const grid  = document.getElementById('videoGrid');
+  const empty = document.getElementById('videoEmptyState');
+  grid.innerHTML = `
+    <div class="loading-state">
+      <img src="cat_wave.gif" alt="" style="width:75px;mix-blend-mode:multiply;" />
+      <p style="font-family:'Pixelify Sans',monospace;color:#9c4473;margin-top:0.5rem;font-size:0.88rem;">loading videos... ♡</p>
+    </div>`;
+  empty.classList.add('hidden');
+
+  const manifest = await fetchManifest(VIDEO_MANIFEST_PATH);
+  if (manifest) {
+    allVideos = manifest.slice().reverse();
+    renderVideoGallery(allVideos);
+    return;
+  }
+
+  const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+  const token = saved.token || '';
+
+  try {
+    const headers = token ? { Authorization: `token ${token}` } : {};
+    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/${VIDEO_FOLDER}`, { headers });
+
+    if (res.status === 404) { renderVideoGallery([]); return; }
+    if (res.status === 403) {
+      renderVideoGallery([]);
+      const sub = document.querySelector('#videoEmptyState .empty-sub');
+      if (sub) sub.textContent = "GitHub rate limit reached — try again shortly, or upload once to auto-fix this.";
+      return;
+    }
+    if (!res.ok) throw new Error('GitHub fetch failed');
+
+    const files = await res.json();
+    allVideos = files
+      .filter(f => /\.(mp4|webm|mov|m4v)$/i.test(f.name))
+      .map(f => {
+        const nameNoExt = f.name.replace(/\.[^.]+$/, '');
+        const parts     = nameNoExt.split('_');
+        const rawName   = parts.slice(1).join(' ').replace(/_/g, ' ') || 'A sweet memory';
+        return { id: f.sha, type: 'video', caption: rawName, date: '', url: f.download_url };
+      })
+      .reverse();
+
+    renderVideoGallery(allVideos);
+  } catch (err) {
+    console.error(err);
+    renderVideoGallery([]);
+  }
+}
+
+function renderVideoGallery(videos) {
+  const grid  = document.getElementById('videoGrid');
+  const empty = document.getElementById('videoEmptyState');
+  grid.innerHTML = '';
+
+  if (!videos.length) {
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  videos.forEach((mem, i) => {
+    const card = document.createElement('div');
+    card.className = 'memory-card is-video';
+    card.style.animationDelay = (i * 0.055) + 's';
+    card.innerHTML = `
+      <video src="${mem.url}" class="card-photo" muted preload="metadata"></video>
+      <div class="memory-card-body">
+        <p class="memory-card-caption">${mem.caption}</p>
+        ${mem.date ? `<p class="memory-card-date">${formatDate(mem.date)}</p>` : ''}
+      </div>`;
+    card.onclick = () => openLightbox(mem);
+    grid.appendChild(card);
+  });
+}
+
+function filterVideos() {
+  const q = document.getElementById('videoSearchBox').value.toLowerCase();
+  renderVideoGallery(allVideos.filter(m => m.caption.toLowerCase().includes(q)));
 }
 
 function formatDate(d) {
@@ -542,7 +663,7 @@ function formatDate(d) {
 }
 
 // ═══════════════════════════════════════════
-// LIGHTBOX
+// LIGHTBOX (shared by Photos and Videos)
 // ═══════════════════════════════════════════
 function openLightbox(mem) {
   const img = document.getElementById('lbImg');
