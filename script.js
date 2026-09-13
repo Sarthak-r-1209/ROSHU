@@ -1,10 +1,10 @@
 /* ═══════════════════════════════════════════
-   ROSHNI'S MEMORIES — script.js
+   ROSHANI'S MEMORIES — script.js
    ═══════════════════════════════════════════ */
 
-const SETTINGS_KEY  = 'roshni_memories_settings';
-const GALLERY_AUTH  = 'roshni_gallery_unlocked';
-const PASSWORD      = 'roshnisarthakforever'; // change this to whatever secret word you like
+const SETTINGS_KEY  = 'roshani_memories_settings';
+const GALLERY_AUTH  = 'roshani_gallery_unlocked';
+const PASSWORD      = 'roshanisarthakforever'; // change this to whatever secret word you like
 
 // The repo everyone's gallery reads from, regardless of device/browser.
 // ⚠️ Set this to your real repo, exactly as it appears on GitHub.
@@ -14,6 +14,20 @@ const MANIFEST_PATH = 'memories/manifest.json';
 const MUSIC_FOLDER = 'music';
 const MUSIC_MANIFEST_PATH = 'music/manifest.json';
 const MAX_FILE_SIZE_MB = 45; // GitHub's Contents API + browser memory get unreliable past this
+
+// Reliable UTF-8 <-> base64 helpers (handles emoji/hearts correctly, unlike the
+// deprecated escape()/unescape() trick, which could silently corrupt manifest.json).
+function utf8ToBase64(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  bytes.forEach(b => { binary += String.fromCharCode(b); });
+  return btoa(binary);
+}
+function base64ToUtf8(b64) {
+  const binary = atob(b64.replace(/\n/g, ''));
+  const bytes  = Uint8Array.from(binary, c => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
 
 // ═══════════════════════════════════════════
 // CANVAS — floating hearts, stars, flowers
@@ -85,10 +99,7 @@ function showMain() {
   document.getElementById('mainApp').classList.remove('hidden');
   document.getElementById('mainApp').classList.add('active');
   loadSavedSettings();
-  // Check if gallery was already unlocked this session
-  if (sessionStorage.getItem(GALLERY_AUTH) === 'true') {
-    revealGallery();
-  }
+  // Always require the password on every visit/reload — no auto-unlock.
 }
 
 // ═══════════════════════════════════════════
@@ -311,15 +322,18 @@ async function uploadToGitHub() {
 // tight 60-requests/hour limit the api.github.com listing endpoint has — this
 // is what makes the gallery/playlist load fast and reliably on any device.
 async function fetchManifest(path) {
-  try {
-    const res = await fetch(`https://raw.githubusercontent.com/${REPO}/main/${path}?t=${Date.now()}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Array.isArray(data) ? data : null;
-  } catch (err) {
-    console.error('Manifest fetch failed:', err);
-    return null;
+  for (const branch of ['main', 'master']) {
+    try {
+      const res = await fetch(`https://raw.githubusercontent.com/${REPO}/${branch}/${path}?t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) return data;
+      }
+    } catch (err) {
+      console.error(`Manifest fetch failed on branch ${branch}:`, err);
+    }
   }
+  return null;
 }
 
 // Fetches the current manifest.json at `path` (if any), appends new entries, and saves it back.
@@ -333,9 +347,13 @@ async function appendManyToManifest(path, newEntries, token) {
     const data = await getRes.json();
     sha = data.sha;
     try {
-      manifest = JSON.parse(decodeURIComponent(escape(atob(data.content.replace(/\n/g, '')))));
+      manifest = JSON.parse(base64ToUtf8(data.content));
       if (!Array.isArray(manifest)) manifest = [];
-    } catch { manifest = []; }
+    } catch (err) {
+      // IMPORTANT: never silently discard an unparseable manifest — that would
+      // wipe out everyone's existing photos/videos/songs. Fail loudly instead.
+      throw new Error(`Existing manifest at "${path}" couldn't be read (it may be corrupted) — nothing was overwritten. Details: ${err.message}`);
+    }
   } else if (getRes.status !== 404) {
     throw new Error(`Couldn't read existing manifest (${getRes.status})`);
   }
@@ -344,7 +362,7 @@ async function appendManyToManifest(path, newEntries, token) {
 
   const body = {
     message: 'Update manifest ♡',
-    content: btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2)))),
+    content: utf8ToBase64(JSON.stringify(manifest, null, 2)),
   };
   if (sha) body.sha = sha;
 
@@ -389,7 +407,7 @@ async function syncManifestFromGitHub() {
 
     const body = {
       message: 'Sync memories manifest ♡',
-      content: btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2)))),
+      content: utf8ToBase64(JSON.stringify(manifest, null, 2)),
     };
     if (sha) body.sha = sha;
 
@@ -677,7 +695,7 @@ async function syncMusicManifest() {
 
     const body = {
       message: 'Sync music manifest ♡',
-      content: btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2)))),
+      content: utf8ToBase64(JSON.stringify(manifest, null, 2)),
     };
     if (sha) body.sha = sha;
 
