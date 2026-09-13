@@ -9,6 +9,11 @@ const PASSWORD      = 'roshnisarthakforever'; // change this to whatever secret 
 // The repo everyone's gallery reads from, regardless of device/browser.
 // ⚠️ Set this to your real repo, exactly as it appears on GitHub.
 const REPO = 'Sarthak-r-1209/ROSHU';
+const MEDIA_FOLDER = 'memories';
+const MANIFEST_PATH = 'memories/manifest.json';
+const MUSIC_FOLDER = 'music';
+const MUSIC_MANIFEST_PATH = 'music/manifest.json';
+const MAX_FILE_SIZE_MB = 45; // GitHub's Contents API + browser memory get unreliable past this
 
 // ═══════════════════════════════════════════
 // CANVAS — floating hearts, stars, flowers
@@ -98,6 +103,7 @@ function showView(view) {
   document.getElementById(view + 'View').classList.remove('hidden');
   document.getElementById(view + 'View').classList.add('active');
   document.getElementById('nav' + view.charAt(0).toUpperCase() + view.slice(1)).classList.add('active');
+  if (view === 'music') initMusicView();
 }
 
 // ═══════════════════════════════════════════
@@ -165,10 +171,13 @@ function handleFiles(files) {
   const strip = document.getElementById('previewStrip');
   strip.innerHTML = '';
   pendingFiles.forEach(file => {
-    const img = document.createElement('img');
-    img.className = 'preview-thumb';
-    img.src = URL.createObjectURL(file);
-    strip.appendChild(img);
+    const url = URL.createObjectURL(file);
+    const isVideo = file.type.startsWith('video/');
+    const el = document.createElement(isVideo ? 'video' : 'img');
+    el.className = 'preview-thumb';
+    el.src = url;
+    if (isVideo) { el.muted = true; el.setAttribute('preload', 'metadata'); }
+    strip.appendChild(el);
   });
 }
 
@@ -249,10 +258,13 @@ async function uploadToGitHub() {
   const uploaded = [];
   for (const file of pendingFiles) {
     try {
+      if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)}MB — please keep files under ${MAX_FILE_SIZE_MB}MB (try compressing the video first).`);
+      }
       const base64  = await toBase64(file);
       const ts      = Date.now();
       const safe    = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const path    = `memories/${ts}_${safe}`;
+      const path    = `${MEDIA_FOLDER}/${ts}_${safe}`;
       const res     = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
         method:  'PUT',
         headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
@@ -265,6 +277,7 @@ async function uploadToGitHub() {
       const data = await res.json();
       uploaded.push({
         id:        ts + '_' + Math.random().toString(36).slice(2),
+        type:      file.type.startsWith('video/') ? 'video' : 'photo',
         caption:   caption || safe,
         date:      date || new Date().toISOString().split('T')[0],
         url:       data.content.download_url,
@@ -277,13 +290,124 @@ async function uploadToGitHub() {
     }
   }
 
-  setStatus(`✓ ${uploaded.length} photo${uploaded.length > 1 ? 's' : ''} saved! ♡`, 'success');
+  setStatus(`✓ ${uploaded.length} item${uploaded.length > 1 ? 's' : ''} saved! Updating gallery list... ♡`, 'loading');
+  try {
+    await appendManyToManifest(MANIFEST_PATH, uploaded, token);
+  } catch (err) {
+    console.error('Manifest update failed:', err);
+    // Photos/videos are already safely uploaded even if this step fails — not fatal.
+  }
+
+  setStatus(`✓ ${uploaded.length} item${uploaded.length > 1 ? 's' : ''} saved! ♡`, 'success');
   document.getElementById('uploadBtn').disabled = false;
   pendingFiles = [];
   document.getElementById('previewStrip').innerHTML = '';
   document.getElementById('memCaption').value = '';
   document.getElementById('memDate').value    = '';
   setTimeout(() => { loadMemories(); showView('gallery'); setStatus(''); }, 2000);
+}
+
+// Fetches a manifest.json via GitHub's raw CDN, which is NOT subject to the
+// tight 60-requests/hour limit the api.github.com listing endpoint has — this
+// is what makes the gallery/playlist load fast and reliably on any device.
+async function fetchManifest(path) {
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${REPO}/main/${path}?t=${Date.now()}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return Array.isArray(data) ? data : null;
+  } catch (err) {
+    console.error('Manifest fetch failed:', err);
+    return null;
+  }
+}
+
+// Fetches the current manifest.json at `path` (if any), appends new entries, and saves it back.
+async function appendManyToManifest(path, newEntries, token) {
+  const headers = { Authorization: `token ${token}` };
+  let sha = null;
+  let manifest = [];
+
+  const getRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${path}`, { headers });
+  if (getRes.ok) {
+    const data = await getRes.json();
+    sha = data.sha;
+    try {
+      manifest = JSON.parse(decodeURIComponent(escape(atob(data.content.replace(/\n/g, '')))));
+      if (!Array.isArray(manifest)) manifest = [];
+    } catch { manifest = []; }
+  } else if (getRes.status !== 404) {
+    throw new Error(`Couldn't read existing manifest (${getRes.status})`);
+  }
+
+  manifest.push(...newEntries);
+
+  const body = {
+    message: 'Update manifest ♡',
+    content: btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2)))),
+  };
+  if (sha) body.sha = sha;
+
+  const putRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${path}`, {
+    method:  'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+  if (!putRes.ok) {
+    const e = await putRes.json().catch(() => ({}));
+    throw new Error(e.message || 'Failed to save manifest');
+  }
+}
+
+// One-time helper: builds manifest.json from whatever's already in memories/,
+// for photos uploaded before this manifest system existed. Run once from a
+// device that has a token saved, then every device is fixed going forward.
+async function syncManifestFromGitHub() {
+  const token = document.getElementById('ghToken').value.trim();
+  if (!token) { setStatus('Enter your GitHub token first to sync.', 'error'); return; }
+
+  setStatus('Syncing existing photos into the manifest... ♡', 'loading');
+  try {
+    const headers = { Authorization: `token ${token}` };
+    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/memories`, { headers });
+    if (!res.ok) throw new Error(`(${res.status}) Couldn't list existing photos`);
+    const files = await res.json();
+
+    const manifest = files
+      .filter(f => /\.(jpe?g|png|gif|webp|mp4|webm|mov|m4v)$/i.test(f.name))
+      .map(f => {
+        const nameNoExt = f.name.replace(/\.[^.]+$/, '');
+        const parts     = nameNoExt.split('_');
+        const rawName   = parts.slice(1).join(' ').replace(/_/g, ' ') || 'A sweet memory';
+        const isVideo   = /\.(mp4|webm|mov|m4v)$/i.test(f.name);
+        return { id: f.sha, type: isVideo ? 'video' : 'photo', caption: rawName, date: '', url: f.download_url };
+      });
+
+    let sha = null;
+    const getRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${MANIFEST_PATH}`, { headers });
+    if (getRes.ok) { const d = await getRes.json(); sha = d.sha; }
+
+    const body = {
+      message: 'Sync memories manifest ♡',
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2)))),
+    };
+    if (sha) body.sha = sha;
+
+    const putRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${MANIFEST_PATH}`, {
+      method:  'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    if (!putRes.ok) {
+      const e = await putRes.json().catch(() => ({}));
+      throw new Error(e.message || 'Failed to save manifest');
+    }
+
+    setStatus(`✓ Synced ${manifest.length} photo(s) — gallery will now load fast everywhere ♡`, 'success');
+    setTimeout(() => { loadMemories(); setStatus(''); }, 2000);
+  } catch (err) {
+    setStatus(`❌ ${err.message}`, 'error');
+  }
 }
 
 function toBase64(file) {
@@ -315,25 +439,41 @@ async function loadMemories() {
     </div>`;
   empty.classList.add('hidden');
 
+  // FAST PATH: read manifest.json via GitHub's raw CDN (works reliably on any device).
+  const manifest = await fetchManifest(MANIFEST_PATH);
+  if (manifest) {
+    allMemories = manifest.slice().reverse();
+    renderGallery(allMemories);
+    return;
+  }
+
+  // FALLBACK: list the memories/ folder directly via the GitHub API. Used only
+  // if manifest.json doesn't exist yet (e.g. before the first sync/upload).
   const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-  const repo  = REPO; // fixed — same repo for every visitor, on any device
-  const token = saved.token || ''; // optional: only helps with GitHub's rate limit, viewing works without it
+  const token = saved.token || '';
 
   try {
     const headers = token ? { Authorization: `token ${token}` } : {};
-    const res = await fetch(`https://api.github.com/repos/${repo}/contents/memories`, { headers });
+    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/memories`, { headers });
 
     if (res.status === 404) { renderGallery([]); return; }
+    if (res.status === 403) {
+      renderGallery([]);
+      const sub = document.querySelector('#emptyState .empty-sub');
+      if (sub) sub.textContent = "GitHub rate limit reached — try again shortly, or upload once to auto-fix this.";
+      return;
+    }
     if (!res.ok) throw new Error('GitHub fetch failed');
 
     const files = await res.json();
     allMemories = files
-      .filter(f => /\.(jpe?g|png|gif|webp)$/i.test(f.name))
+      .filter(f => /\.(jpe?g|png|gif|webp|mp4|webm|mov|m4v)$/i.test(f.name))
       .map(f => {
         const nameNoExt = f.name.replace(/\.[^.]+$/, '');
         const parts     = nameNoExt.split('_');
         const rawName   = parts.slice(1).join(' ').replace(/_/g, ' ') || 'A sweet memory';
-        return { id: f.sha, caption: rawName, date: '', url: f.download_url };
+        const isVideo   = /\.(mp4|webm|mov|m4v)$/i.test(f.name);
+        return { id: f.sha, type: isVideo ? 'video' : 'photo', caption: rawName, date: '', url: f.download_url };
       })
       .reverse();
 
@@ -357,10 +497,13 @@ function renderGallery(memories) {
 
   memories.forEach((mem, i) => {
     const card = document.createElement('div');
-    card.className = 'memory-card';
+    card.className = 'memory-card' + (mem.type === 'video' ? ' is-video' : '');
     card.style.animationDelay = (i * 0.055) + 's';
+    const mediaHtml = mem.type === 'video'
+      ? `<video src="${mem.url}" class="card-photo" muted preload="metadata"></video>`
+      : `<img src="${mem.url}" alt="${mem.caption}" class="card-photo" loading="lazy" />`;
     card.innerHTML = `
-      <img src="${mem.url}" alt="${mem.caption}" class="card-photo" loading="lazy" />
+      ${mediaHtml}
       <div class="memory-card-body">
         <p class="memory-card-caption">${mem.caption}</p>
         ${mem.date ? `<p class="memory-card-date">${formatDate(mem.date)}</p>` : ''}
@@ -384,7 +527,21 @@ function formatDate(d) {
 // LIGHTBOX
 // ═══════════════════════════════════════════
 function openLightbox(mem) {
-  document.getElementById('lbImg').src             = mem.url;
+  const img = document.getElementById('lbImg');
+  const vid = document.getElementById('lbVideo');
+  if (mem.type === 'video') {
+    vid.src = mem.url;
+    vid.classList.remove('hidden');
+    img.classList.add('hidden');
+    img.src = '';
+    vid.play().catch(() => {});
+  } else {
+    img.src = mem.url;
+    img.classList.remove('hidden');
+    vid.classList.add('hidden');
+    vid.pause();
+    vid.src = '';
+  }
   document.getElementById('lbCaption').textContent = mem.caption;
   document.getElementById('lbDate').textContent    = formatDate(mem.date);
   document.getElementById('lightbox').classList.remove('hidden');
@@ -393,6 +550,8 @@ function openLightbox(mem) {
 function closeLightbox() {
   document.getElementById('lightbox').classList.add('hidden');
   document.body.style.overflow = '';
+  const vid = document.getElementById('lbVideo');
+  vid.pause();
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
 
@@ -401,3 +560,213 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbo
 // ═══════════════════════════════════════════
 const memDate = document.getElementById('memDate');
 if (memDate) memDate.value = new Date().toISOString().split('T')[0];
+
+// ═══════════════════════════════════════════
+// MUSIC / PLAYLIST
+// ═══════════════════════════════════════════
+let pendingMusicFile   = null;
+let currentPlaylist    = [];
+let currentTrackIndex  = -1;
+let musicLoaded        = false;
+const audioEl          = document.getElementById('audioPlayer');
+
+function initMusicView() {
+  const unlocked = sessionStorage.getItem(GALLERY_AUTH) === 'true';
+  document.getElementById('musicLockedMsg').classList.toggle('hidden', unlocked);
+  document.getElementById('musicContent').classList.toggle('hidden', !unlocked);
+  if (unlocked && !musicLoaded) {
+    musicLoaded = true;
+    loadPlaylist();
+  }
+}
+
+function handleMusicFile(files) {
+  pendingMusicFile = files[0] || null;
+  document.getElementById('musicFileName').textContent = pendingMusicFile ? `🎵 ${pendingMusicFile.name}` : '';
+}
+
+function setMusicStatus(msg, type = '') {
+  const el = document.getElementById('musicUploadStatus');
+  el.textContent = msg;
+  el.className   = 'upload-status' + (type ? ' status-' + type : '');
+}
+
+async function uploadMusicToGitHub() {
+  const saved  = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+  const token  = saved.token || document.getElementById('ghToken').value.trim();
+  const title  = document.getElementById('trackTitle').value.trim();
+  const artist = document.getElementById('trackArtist').value.trim();
+
+  if (!token) { setMusicStatus('Add your GitHub token under "Add Memory" first — it\'s reused here. ♡', 'error'); return; }
+  if (!pendingMusicFile) { setMusicStatus('Please choose an mp3 file.', 'error'); return; }
+  if (pendingMusicFile.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+    setMusicStatus(`File is ${(pendingMusicFile.size / 1024 / 1024).toFixed(1)}MB — please keep it under ${MAX_FILE_SIZE_MB}MB.`, 'error');
+    return;
+  }
+
+  setMusicStatus('Checking repo access... ♡', 'loading');
+  document.getElementById('musicUploadBtn').disabled = true;
+
+  try {
+    await verifyRepoAccess(REPO, token);
+
+    setMusicStatus('Uploading song... ♡', 'loading');
+    const base64 = await toBase64(pendingMusicFile);
+    const ts     = Date.now();
+    const safe   = pendingMusicFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path   = `${MUSIC_FOLDER}/${ts}_${safe}`;
+
+    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/${path}`, {
+      method:  'PUT',
+      headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ message: `Add song: ${title || safe} ♡`, content: base64 }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(`(${res.status}) ${e.message || 'Upload failed'}`);
+    }
+    const data = await res.json();
+
+    const entry = {
+      id:     ts + '_' + Math.random().toString(36).slice(2),
+      title:  title || safe,
+      artist: artist || '',
+      url:    data.content.download_url,
+    };
+    await appendManyToManifest(MUSIC_MANIFEST_PATH, [entry], token);
+
+    setMusicStatus('✓ Song added to the playlist! ♡', 'success');
+    pendingMusicFile = null;
+    document.getElementById('musicFileName').textContent = '';
+    document.getElementById('trackTitle').value  = '';
+    document.getElementById('trackArtist').value = '';
+    setTimeout(() => { loadPlaylist(); setMusicStatus(''); }, 1500);
+  } catch (err) {
+    setMusicStatus(`❌ ${err.message}`, 'error');
+  } finally {
+    document.getElementById('musicUploadBtn').disabled = false;
+  }
+}
+
+// One-time helper for songs uploaded straight to GitHub before this manifest existed.
+async function syncMusicManifest() {
+  const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+  const token = saved.token || document.getElementById('ghToken').value.trim();
+  if (!token) { setMusicStatus('Add your GitHub token under "Add Memory" first.', 'error'); return; }
+
+  setMusicStatus('Syncing existing songs... ♡', 'loading');
+  try {
+    const headers = { Authorization: `token ${token}` };
+    const res = await fetch(`https://api.github.com/repos/${REPO}/contents/${MUSIC_FOLDER}`, { headers });
+    if (res.status === 404) { setMusicStatus('No music folder found yet — add a song first.', 'error'); return; }
+    if (!res.ok) throw new Error(`(${res.status}) Couldn't list existing songs`);
+    const files = await res.json();
+
+    const manifest = files
+      .filter(f => /\.(mp3|m4a|wav|ogg)$/i.test(f.name))
+      .map(f => {
+        const nameNoExt = f.name.replace(/\.[^.]+$/, '');
+        const parts     = nameNoExt.split('_');
+        const rawName   = parts.slice(1).join(' ').replace(/_/g, ' ') || 'Untitled';
+        return { id: f.sha, title: rawName, artist: '', url: f.download_url };
+      });
+
+    let sha = null;
+    const getRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${MUSIC_MANIFEST_PATH}`, { headers });
+    if (getRes.ok) { const d = await getRes.json(); sha = d.sha; }
+
+    const body = {
+      message: 'Sync music manifest ♡',
+      content: btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2)))),
+    };
+    if (sha) body.sha = sha;
+
+    const putRes = await fetch(`https://api.github.com/repos/${REPO}/contents/${MUSIC_MANIFEST_PATH}`, {
+      method:  'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(body),
+    });
+    if (!putRes.ok) {
+      const e = await putRes.json().catch(() => ({}));
+      throw new Error(e.message || 'Failed to save manifest');
+    }
+
+    setMusicStatus(`✓ Synced ${manifest.length} song(s) ♡`, 'success');
+    setTimeout(() => { loadPlaylist(); setMusicStatus(''); }, 1500);
+  } catch (err) {
+    setMusicStatus(`❌ ${err.message}`, 'error');
+  }
+}
+
+async function loadPlaylist() {
+  const list  = document.getElementById('playlistList');
+  const empty = document.getElementById('playlistEmpty');
+  list.innerHTML = `<p style="text-align:center;color:#9c4473;font-size:0.85rem;padding:1rem;">loading playlist... ♡</p>`;
+  empty.classList.add('hidden');
+
+  const manifest = await fetchManifest(MUSIC_MANIFEST_PATH);
+  currentPlaylist = manifest || [];
+  renderPlaylist();
+}
+
+function renderPlaylist() {
+  const list  = document.getElementById('playlistList');
+  const empty = document.getElementById('playlistEmpty');
+  list.innerHTML = '';
+
+  if (!currentPlaylist.length) {
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  currentPlaylist.forEach((track, i) => {
+    const row = document.createElement('div');
+    const isCurrent = i === currentTrackIndex;
+    row.className = 'playlist-row' + (isCurrent ? ' playing' : '');
+    row.innerHTML = `
+      <span class="playlist-icon">${isCurrent && !audioEl.paused ? '♪' : '♡'}</span>
+      <div class="playlist-info">
+        <p class="playlist-title">${track.title}</p>
+        ${track.artist ? `<p class="playlist-artist">${track.artist}</p>` : ''}
+      </div>`;
+    row.onclick = () => playTrack(i);
+    list.appendChild(row);
+  });
+}
+
+function playTrack(i) {
+  if (!currentPlaylist.length) return;
+  if (i < 0) i = currentPlaylist.length - 1;
+  if (i >= currentPlaylist.length) i = 0;
+  currentTrackIndex = i;
+  const track = currentPlaylist[i];
+
+  audioEl.src = track.url;
+  audioEl.play().catch(() => {});
+
+  document.getElementById('miniPlayer').classList.remove('hidden');
+  document.getElementById('nowPlayingTitle').textContent  = track.title;
+  document.getElementById('nowPlayingArtist').textContent = track.artist || '';
+  document.getElementById('playPauseBtn').textContent = '⏸';
+  renderPlaylist();
+}
+
+function toggleTrackPlay() {
+  if (!audioEl.src) { if (currentPlaylist.length) playTrack(0); return; }
+  if (audioEl.paused) {
+    audioEl.play();
+    document.getElementById('playPauseBtn').textContent = '⏸';
+  } else {
+    audioEl.pause();
+    document.getElementById('playPauseBtn').textContent = '▶';
+  }
+  renderPlaylist();
+}
+
+function playNextTrack() { playTrack(currentTrackIndex + 1); }
+function playPrevTrack() { playTrack(currentTrackIndex - 1); }
+
+if (audioEl) {
+  audioEl.addEventListener('ended', playNextTrack);
+}

@@ -676,6 +676,106 @@ body {
 .lb-date    { font-size: 0.75rem; color: #c07090; margin-top: 0.15rem; }
 
 /* ══════════════════════════════════════════
+   VIDEO CARDS (gallery)
+══════════════════════════════════════════ */
+.memory-card.is-video { position: relative; }
+.memory-card.is-video::after {
+  content: '▶';
+  position: absolute;
+  top: calc(clamp(130px, 30vw, 195px) / 2);
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  background: rgba(233,30,140,0.85);
+  color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1.05rem;
+  pointer-events: none;
+}
+
+/* ══════════════════════════════════════════
+   MUSIC / PLAYLIST
+══════════════════════════════════════════ */
+.playlist-list { display: flex; flex-direction: column; gap: 0.55rem; }
+.playlist-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #fff;
+  border: 1.5px solid var(--pink-rose);
+  border-radius: 14px;
+  padding: 0.65rem 0.95rem;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s, background 0.2s;
+  touch-action: manipulation;
+}
+.playlist-row:hover  { transform: translateY(-2px); box-shadow: 0 6px 18px #f48fb122; }
+.playlist-row.playing {
+  border-color: var(--pink);
+  background: var(--pink-blush);
+}
+.playlist-icon { font-size: 1.1rem; color: var(--pink); flex-shrink: 0; }
+.playlist-info { flex: 1; min-width: 0; }
+.playlist-title {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--pink-dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.playlist-artist { font-size: 0.75rem; color: #c07090; margin-top: 0.08rem; }
+
+.mini-player {
+  position: sticky;
+  bottom: 1rem;
+  margin: 1.8rem auto 0;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  background: #fff;
+  border: 1.5px solid var(--pink-rose);
+  border-radius: 50px;
+  padding: 0.5rem 0.6rem 0.5rem 0.9rem;
+  box-shadow: 0 8px 26px #e91e8c28;
+  max-width: 480px;
+}
+.mini-player-gif { width: 40px; mix-blend-mode: multiply; flex-shrink: 0; }
+.mini-player-info { flex: 1; min-width: 0; }
+.mini-player-title {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: var(--pink-dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mini-player-artist {
+  font-size: 0.72rem;
+  color: #c07090;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mini-player-controls { display: flex; gap: 0.35rem; flex-shrink: 0; }
+.mini-player-controls button {
+  background: var(--pink-pale);
+  border: none;
+  border-radius: 50%;
+  width: 34px; height: 34px;
+  cursor: pointer;
+  color: var(--pink-dark);
+  font-size: 0.9rem;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.2s;
+  touch-action: manipulation;
+}
+.mini-player-controls button:hover { background: var(--pink-rose); }
+
+/* ══════════════════════════════════════════
    MOBILE TWEAKS
 ══════════════════════════════════════════ */
 @media (max-width: 400px) {
@@ -685,4 +785,5 @@ body {
   .char-cat-heart { width: 52px; }
   .lock-card { padding: 1.6rem 1.1rem 1.4rem; }
   .gallery-grid { grid-template-columns: repeat(2, 1fr); gap: 0.7rem; }
+  .mini-player { max-width: 100%; }
 }

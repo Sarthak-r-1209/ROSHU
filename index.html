@@ -52,6 +52,7 @@
         <nav class="header-nav">
           <button class="nav-btn active" onclick="showView('gallery')" id="navGallery">✦ Gallery</button>
           <button class="nav-btn"        onclick="showView('upload')"  id="navUpload">♡ Add Memory</button>
+          <button class="nav-btn"        onclick="showView('music')"   id="navMusic">♫ Music</button>
         </nav>
       </div>
     </header>
@@ -155,8 +156,8 @@
 
           <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
             <div class="drop-emoji">🖼</div>
-            <p class="drop-text">Drop your photo here<br><span>or click to browse</span></p>
-            <input type="file" id="fileInput" accept="image/*" multiple style="display:none" onchange="handleFiles(this.files)" />
+            <p class="drop-text">Drop your photo or video here<br><span>or click to browse</span></p>
+            <input type="file" id="fileInput" accept="image/*,video/*" multiple style="display:none" onchange="handleFiles(this.files)" />
           </div>
 
           <div class="preview-strip" id="previewStrip"></div>
@@ -165,9 +166,98 @@
             <span id="uploadBtnText">Save to Our Scrapbook ♡</span>
           </button>
           <div class="upload-status" id="uploadStatus"></div>
+
+          <p style="margin-top:1rem;font-size:0.8rem;text-align:center;">
+            <a href="#" onclick="syncManifestFromGitHub(); return false;">↻ One-time sync (fixes gallery on other devices)</a>
+          </p>
         </div>
 
       </div>
+    </section>
+
+    <!-- ── MUSIC VIEW ── -->
+    <section id="musicView" class="view hidden">
+
+      <div class="gallery-hero">
+        <img src="sparkle_star.gif" alt="" class="hero-star left"  />
+        <div class="hero-text">
+          <h2 class="gallery-title">Our Playlist 🎵</h2>
+          <p class="gallery-subtitle">songs that remind us of us</p>
+        </div>
+        <img src="sparkle_star.gif" alt="" class="hero-star right" />
+      </div>
+
+      <div id="musicLockedMsg" class="empty-state">
+        <img src="bear_heart.gif" alt="" class="empty-bear" />
+        <p class="empty-text">Unlock the gallery first ♡</p>
+        <p class="empty-sub">head to the Gallery tab and enter the secret word</p>
+        <button class="btn-enter small" onclick="showView('gallery')">Go to Gallery</button>
+      </div>
+
+      <div id="musicContent" class="hidden">
+        <div class="upload-layout" style="grid-template-columns:1fr 1.5fr;">
+
+          <div class="upload-card" style="align-self:start;">
+            <div class="upload-header">
+              <img src="sparkle_star.gif" alt="" class="card-cake" />
+              <div>
+                <h2 class="upload-title">Add a Song ✦</h2>
+                <p class="upload-sub">mp3 files, straight to our playlist</p>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Title</label>
+              <input type="text" id="trackTitle" placeholder="Song title" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label>Artist</label>
+              <input type="text" id="trackArtist" placeholder="Artist" class="form-input" />
+            </div>
+
+            <div class="drop-zone" id="musicDropZone" onclick="document.getElementById('musicFileInput').click()">
+              <div class="drop-emoji">🎵</div>
+              <p class="drop-text">Drop your mp3 here<br><span>or click to browse</span></p>
+              <input type="file" id="musicFileInput" accept="audio/*" style="display:none" onchange="handleMusicFile(this.files)" />
+            </div>
+            <p id="musicFileName" style="font-size:0.8rem;color:#9c4473;margin-bottom:0.9rem;"></p>
+
+            <button class="btn-upload" id="musicUploadBtn" onclick="uploadMusicToGitHub()">
+              <span>Add to Playlist ♡</span>
+            </button>
+            <div class="upload-status" id="musicUploadStatus"></div>
+
+            <p style="margin-top:1rem;font-size:0.78rem;text-align:center;">
+              <a href="#" onclick="syncMusicManifest(); return false;">↻ One-time sync (songs already in the repo)</a>
+            </p>
+          </div>
+
+          <div>
+            <div id="playlistEmpty" class="empty-state hidden">
+              <img src="cat_heart.gif" alt="" class="empty-bear" />
+              <p class="empty-text">No songs yet...</p>
+              <p class="empty-sub">add your first one! ♡</p>
+            </div>
+            <div id="playlistList" class="playlist-list"></div>
+          </div>
+
+        </div>
+
+        <div id="miniPlayer" class="mini-player hidden">
+          <img src="cat_dance.gif" alt="" class="mini-player-gif" />
+          <div class="mini-player-info">
+            <p class="mini-player-title"  id="nowPlayingTitle">—</p>
+            <p class="mini-player-artist" id="nowPlayingArtist"></p>
+          </div>
+          <div class="mini-player-controls">
+            <button onclick="playPrevTrack()" title="Previous">⏮</button>
+            <button onclick="toggleTrackPlay()" id="playPauseBtn" title="Play/Pause">⏸</button>
+            <button onclick="playNextTrack()" title="Next">⏭</button>
+          </div>
+          <audio id="audioPlayer"></audio>
+        </div>
+      </div>
+
     </section>
 
   </div>
@@ -177,6 +267,7 @@
     <div class="lightbox-inner" onclick="event.stopPropagation()">
       <button class="lb-close" onclick="closeLightbox()">✕</button>
       <img id="lbImg" src="" alt="" class="lb-img" />
+      <video id="lbVideo" class="lb-img hidden" controls></video>
       <div class="lb-info">
         <img src="bear_heart.gif" alt="" class="lb-bear" />
         <div>
